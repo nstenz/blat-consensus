@@ -3,17 +3,13 @@ use strict;
 use warnings;
 use Getopt::Long;
 
+# Not yet implemented
 #my $overhang_length = 50;
 my $overhang_length = 0;
-#my $target_perc_cov_threshold = 1;
-my $target_perc_cov_threshold = 0.40;
+my $target_perc_cov_threshold = 0;
 
 my $blat = check_path_for_exec("blat");
-my $cap3 = check_path_for_exec("cap3");
-my $muscle = check_path_for_exec("muscle");
 my $mafft = check_path_for_exec("mafft");
-my $blastn = check_path_for_exec("blastn");
-my $makeblastdb = check_path_for_exec("makeblastdb");
 
 my $targets;
 GetOptions(
@@ -26,17 +22,16 @@ die "You must specify an assembly as input.\n" if (!defined($input));
 die "You must specify a fasta file containing target sequences (-t).\n" if (!defined($targets));
 die "You must you have specified an incorrect argument.\n" if (@ARGV);
 
-my $output_fasta = $input.".hits";
-#my $output_psl = $input.".hits.psl";
+# Output file names
+#my $output_fasta = $input.".hits";
 my $blat_out_name = $input.".psl";
-#my $blat_out_name = $input.".blat";
-my $blast_out_name = $input.".blast";
+(my $consensus_output = $input) =~ s/\.fa(sta)?/.con.fasta/i;
 
-system("$blat $input $targets -t=dna -q=dna -noHead $blat_out_name");
-#system("$blat $input $targets -t=dna -q=dna -noHead -tileSize=5 $blat_out_name");
-#system("$blat $input $targets -t=dna -q=dna -noHead $blat_out_name") if (!-e $blat_out_name);
-#system("$blat $input $targets -t=dnax -q=dnax -noHead $blat_out_name");
+# Run blat 
+my $return = system("$blat $input $targets -t=dna -q=dna -noHead $blat_out_name");
+die "Error running blat: '$return'.\n";
 
+# Parse blat output
 my %targets;
 open(my $blat_out, "<", $blat_out_name);
 while (my $line = <$blat_out>) {
@@ -44,29 +39,28 @@ while (my $line = <$blat_out>) {
 
 	my @line = split(/\s+/, $line);
 
+	# Blat headers
 	my ($match, $mismatch, $rep_matches, $n_count, $q_num_inserts, $q_base_inserts, 
 	    $t_num_inserts, $t_base_inserts, $strand, $q_name, $q_size, $q_start, $q_end,
 		$t_name, $t_size, $t_start, $t_end, $block_count, $block_sizes, $q_starts, $t_starts) = @line; 
 
+	# Check that contig meets target coverage threshold
 	if (($match + $mismatch) / $q_size >= $target_perc_cov_threshold) {
-#		print "threshold: $target_perc_cov_threshold, ".(($match + $mismatch) / $q_size)."\n";
-#		$contigs{$t_name}++;
-#		print {$output} "$line\n";
-		#push(@{$targets{$q_name}}, {'NAME' => $t_name, 'STRAND' => $strand, 'STARTS' => $t_starts, 'SIZES' => $block_sizes});
 		push(@{$targets{$q_name}}, {'NAME' => $t_name, 'STRAND' => $strand, 'T_STARTS' => $t_starts, 'Q_STARTS' => $q_starts, 'SIZES' => $block_sizes});
 	}
 }
 close($blat_out);
 
+# Load contig and target sequences
 my %contig_seqs = parse_fasta($input);
 my %target_seqs = parse_fasta($targets);
 
-#mkdir("sequences");
-my $count = 0;
+# Create consensus sequence for each target
+my %consensuses;
 foreach my $target (sort { $a cmp $b } keys %targets) {
 	my @hits = @{$targets{$target}};
 
-	my @alignment;
+	# Holds bases/introns in contigs which map to specific sites in target
 	my %alignment;
 
 	# Add target bases to alignment
@@ -76,8 +70,11 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 		$alignment{$index}->{"TARGET"} = $base;
 	}
 
+	print "Building consensus sequence for '$target'...\n";
+
+	# Extract homologous sequence from each contig
 	foreach my $hit (@hits) {
-		print $hit->{'NAME'},"\n";
+		print "  ",$hit->{'NAME'},"\n";
 
 		my $seq = $contig_seqs{$hit->{'NAME'}};
 		my $contig_length = length($seq);
@@ -86,22 +83,21 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 		my @t_starts = split(",", $hit->{'T_STARTS'});
 		my @q_starts = split(",", $hit->{'Q_STARTS'});
 
+		# Output strandedness
 		if ($hit->{'STRAND'} eq "-") {
-			print "  contig will be reverse complemented\n";
+			print "    Contig will be reverse complemented (- hit).\n";
+		}
+		else {
+			print "    Contig will not be reverse complemented (+ hit).\n";
 		}
 
-		#foreach my $index (0 .. $#starts - 1) {
-		#foreach my $index (0 .. $#t_starts - 1) {
+		# Iterate through aligned blocks of target and contig
 		foreach my $index (0 .. $#t_starts) {
 			my $size = $sizes[$index];
-			#my $start = $starts[$index];
 			my $q_start = $q_starts[$index];
 			my $t_start = $t_starts[$index];
-			#my $next_start = $starts[$index + 1];
 
-		#	my $intron_start = $start + $size;
-		#	my $intron_length = $next_start - $start - $size - 1;
-			#my $intron_start = $t_start + $size;
+			# Where the intron starts 
 			my $intron_start = $t_start + $size - 1;
 
 			# If this is the last (or only) block, we set the next block 
@@ -111,31 +107,26 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 				$next_t_start = $t_starts[$index + 1];
 			}
 			else {
-				# only one block
+				# only/last block
 				$next_t_start = $intron_start + 1;
 			}
 
-			#my $intron_length = $next_t_start - $t_start - $size - 1;
-			#my $intron_length = $next_t_start - $intron_start - 1;
-			#my $intron_length = $next_t_start - $intron_start + 1;
+			# Determine how long the intron is
 			my $intron_length = $next_t_start - $intron_start;
 
-		#	print "  match_start : $start\n";
-		#	print "  match_length : $size\n";
-		#	print "  match_end : ",($start + $size - 1),"\n";
-			print "  match_start : $t_start ($q_start)\n";
-			print "  match_length : $size\n";
-			print "  match_end : ",($t_start + $size - 1),"\n";
+			print "    match_start : $t_start ($q_start)\n";
+			print "    match_length : $size\n";
+			print "    match_end : ",($t_start + $size - 1),"\n";
+			print "    intron_start : $intron_start, intron_length : $intron_length\n\n";
 
-			print "  intron_start : $intron_start, intron_length : $intron_length\n\n";
-
-			#foreach my $index ($start .. $start + $size - 1) {
-			#foreach my $offset (0 .. $size - 1) {
+			# Place aligned characters into %alignment
 			foreach my $offset (0 .. $size - 2) {
 				my $t_index = $t_start + $offset;
 				my $q_index = $q_start + $offset;
 
 				my $char = substr($seq, $t_index, 1);
+
+				# Reverse complement character if needed
 				if ($hit->{'STRAND'} eq "-") {
 					$alignment{$q_index}->{rev_comp($char)}++;
 				}
@@ -144,82 +135,55 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 				}
 			}
 
-			#$alignment{$intron_start}->{substr($seq, $intron_start, $intron_length)}++;
-
+			# Place introns into %alignment
 			if ($intron_length > 0) {
-				if ($hit->{'STRAND'} eq "-") {
-					#$alignment{$intron_start}->{rev_comp(substr($seq, $intron_start, $intron_length))}++;
-					#$alignment{$intron_start - $t_starts[0] + $q_starts[0]}->{rev_comp(substr($seq, $intron_start, $intron_length))}++;
 
+				# Reverse complement intron if needed
+				if ($hit->{'STRAND'} eq "-") {
 					$alignment{$q_start + $intron_start - $t_start}->{rev_comp(substr($seq, $intron_start, $intron_length))}++;
 				}
 				else {
-					#$alignment{$intron_start}->{substr($seq, $intron_start, $intron_length)}++;
-					#$alignment{$intron_start - $t_starts[0] + $q_starts[0]}->{substr($seq, $intron_start, $intron_length)}++;
 					$alignment{$q_start + $intron_start - $t_start}->{substr($seq, $intron_start, $intron_length)}++;
 				}
 			}
 		}
 
-	#	my $start = $starts[0];
-	#	my $end = $starts[$#starts] + $sizes[$#sizes];
-		my $start = $t_starts[0];
-		my $end = $t_starts[$#t_starts] + $sizes[$#sizes];
-
-		print "  length:",length($seq),"\n";
-		#print "  num gaps:",scalar(@starts),"\n";
-		print "  num blocks:",scalar(@t_starts),"\n";
-		print "  init_start: $start\n";
-		print "  init_end: $end\n";
-
-#		# Add overhangs
-#		$start = ($start - $overhang_length < 0) ? (0) : ($start - $overhang_length);
-#		$end = ($end + $overhang_length > $contig_length) ? ($contig_length) : ($end + $overhang_length);
-
-		print "  final_start: $start\n";
-		print "  final_end: $end\n\n";
-
-#		print {$fasta} ">",$hit->{'NAME'},"\n";
-#		my $subseq = substr($seq, $start, $end - $start + 1);
-
-#		if ($hit->{'STRAND'} eq "-") {
-#			print "  reverse complementing strand\n";
-##			$subseq = rev_comp($subseq);
-#		}
-#		print "\n";
-
-#		for (my $i = 0; $i < scalar(@sizes); $i++) {
-#			my $size = $sizes[$i];
-#			my $start = $starts[$i];
+#		my $start = $t_starts[0];
+#		my $end = $t_starts[$#t_starts] + $sizes[$#sizes];
 #
-#			print "  match from $start to ",($start + $size - 1),"\n";
+#		print "  length:",length($seq),"\n";
+#		print "  num blocks:",scalar(@t_starts),"\n";
+#		print "  init_start: $start\n";
+#		print "  init_end: $end\n";
 #
-#			my $subseq = substr($seq, $start, $size);
-#			if ($hit->{'STRAND'} eq "-") {
-#				$subseq = rev_comp($subseq);
-#			}
+##		# Add overhangs
+##		$start = ($start - $overhang_length < 0) ? (0) : ($start - $overhang_length);
+##		$end = ($end + $overhang_length > $contig_length) ? ($contig_length) : ($end + $overhang_length);
 #
-#			print "  ",length($subseq)," == $size\n";
-#			print {$fasta} $subseq;
-#		}
-#		print {$fasta} "\n";
-		#print {$fasta} "$subseq\n";
+#		print "  final_start: $start\n";
+#		print "  final_end: $end\n\n";
 	}
-#	close($fasta);
 
-	use Data::Dumper;
-	#$Data::Dumper::Sortkeys = sub { [sort { $a <=> $b } keys %{$_[0]}] };
-	$Data::Dumper::Sortkeys = sub { [sort { $b <=> $a } keys %{$_[0]}] };
-
-	#print Dumper(@alignment),"\n";
-	print Dumper(\%alignment),"\n";
-	my $alignment = consense_alignment(\%alignment);
-	print "\n\n",$alignment,"\n\n";
-
-	$count ++;
-	die if ($alignment =~ /a|t|c|g/);
-	#die if $count > 1;
+#	use Data::Dumper;
+#	#$Data::Dumper::Sortkeys = sub { [sort { $a <=> $b } keys %{$_[0]}] };
+#	$Data::Dumper::Sortkeys = sub { [sort { $b <=> $a } keys %{$_[0]}] };
+#
+#	#print Dumper(@alignment),"\n";
+#	print Dumper(\%alignment),"\n";
+#	my $alignment = consense_alignment(\%alignment);
+#	print "\n\n",$alignment,"\n\n";
+#
+#	#die if ($alignment =~ /a|t|c|g/);
+	$consensuses{$target} = consense_alignment(\%alignment);	
 }
+
+# Output consensus sequences
+open(my $output, ">", $consensus_output);
+foreach my $target (sort { $a cmp $b } keys %consensuses) {
+	print {$output} ">$target\n";
+	print {$output} "$consensuses{$target}\n";
+}
+close($output);
 
 sub consense_alignment {
 	my $align = shift;
@@ -229,7 +193,6 @@ sub consense_alignment {
 	my %align = %{$align};
 	SITE: foreach my $site (sort { $a <=> $b } keys %align) {
 		my %bases_present = %{$align{$site}};
-		#print "$site(",scalar(keys %bases_present),") ";	
 
 		# Only the target sequence's nucleotide present, no contigs mapped to this site
 		if (scalar(keys %bases_present) == 1) {
@@ -241,21 +204,10 @@ sub consense_alignment {
 			my %introns;
 			my %single_bases;
 
-			#print "target base = $target_base\n";
-
-			# Check whether all mapped contigs have the same bases at the site
-			#my $all_equal_target = 1;
-#			my $total = 0;
-#			my $support = 0;
-#			my $against = 0;
 			foreach my $base_present (keys %bases_present) {
 				next if ($base_present eq "TARGET");
-				#$all_equal_target = 0 if ($base_present ne $target_base);
 
 				# Perhaps filter by proportion here? (remove base if it is present in < x% of contigs)
-			#	$support++ if ($base_present eq $target_base);
-			#	$against++ if ($base_present ne $target_base);
-			#	$total++;
 
 				# Intron located here
 				if (length($base_present) > 1) {
@@ -273,9 +225,6 @@ sub consense_alignment {
 			}
 
 			# If only one nucleotide is found at the site output it
-			#if ($all_equal_target) {
-			#if (($support / $total == 1 || $against / $total == 1) && scalar(keys %bases_present) == 2) {
-			#if (scalar(keys %bases_present) == 2) {
 			if (scalar(keys %single_bases) == 1 && scalar(keys %introns) == 0) {
 				$alignment .= (keys %single_bases)[0];
 			}
@@ -283,48 +232,49 @@ sub consense_alignment {
 			elsif (scalar(keys %introns) == 0) {
 				$alignment .= get_IUPAC(\%single_bases);
 			}
+			# We have introns
 			else {
-				#print "introns: ".scalar(keys %introns),"\n";
 
-			#	# Check if we have single bases too
-			#	if (scalar(keys %single_bases)) {
-			#		print "what to do, what to do?\n";
-			#		die;
-			#	}
-			#	# Only introns (> 1 base)
-			#	else {
-					if (scalar(keys %introns) == 1) {
-						$alignment .= lc((keys %introns)[0]);
+				# We only have one intron, output it
+				if (scalar(keys %introns) == 1) {
+					$alignment .= lc((keys %introns)[0]);
+				}
+				# We have multiple introns, align them
+				else {
+
+					# Create a temporary fasta file to hold introns
+					open(my $intron_fasta, ">", "introns.fa");
+					my $count = 0;
+					foreach my $intron (keys %introns) {
+						print {$intron_fasta} ">$count\n";	
+						print {$intron_fasta} "$intron\n";	
+						$count++;
 					}
-					else {
-						open(my $intron_fasta, ">", "introns.fa");
-						my $count = 0;
-						foreach my $intron (keys %introns) {
-							print {$intron_fasta} ">$count\n";	
-							print {$intron_fasta} "$intron\n";	
-							$count++;
+					close($intron_fasta);
+
+					# Align introns with mafft
+					my $return = system("$mafft --maxiterate 1000 --genafpair --thread 40 introns.fa > introns-aligned.fa 2> /dev/null");
+					die "Error running mafft: '$return'.\n" if ($return);
+
+					# Load aligned introns
+					my %intron_sequences = parse_fasta("introns-aligned.fa");
+					unlink("introns.fa", "introns-aligned.fa");
+
+					# Determine the consensus base at each site of the intron
+					foreach my $index (0 .. length((values %introns)[0]) - 1) {
+
+						my %bases;
+						foreach my $intron (values %intron_sequences) {
+							my $base = substr(uc($intron), $index, 1); 
+
+							# Not quite sure what to do with gaps, ignore for now
+							$bases{$base}++ if ($base ne "-");
 						}
-						close($intron_fasta);
 
-						my $return = system("$mafft --maxiterate 1000 --genafpair --thread 40 introns.fa > introns-aligned.fa 2> /dev/null");
-						die if ($return);
-
-						my %intron_sequences = parse_fasta("introns-aligned.fa");
-						unlink("introns.fa", "introns-aligned.fa");
-
-						foreach my $index (0 .. length((values %introns)[0]) - 1) {
-
-							my %bases;
-							foreach my $intron (values %intron_sequences) {
-								my $base = substr(uc($intron), $index, 1); 
-
-								# Not quite sure what to do with gaps, ignore for now
-								$bases{$base}++ if ($base ne "-");
-							}
-							$alignment .= lc(get_IUPAC(\%bases));
-						}
+						# Get the IUPAC code for the current assortment of nucleotides
+						$alignment .= lc(get_IUPAC(\%bases));
 					}
-			#	}
+				}
 			}
 		}
 	}
@@ -339,34 +289,33 @@ sub get_IUPAC {
 
 	my $code;
 	if (scalar(keys %bases) == 1) {
-		$code .= "A" if (exists($bases{"A"}));
-		$code .= "T" if (exists($bases{"T"}));
-		$code .= "C" if (exists($bases{"C"}));
-		$code .= "G" if (exists($bases{"G"}));
+		$code = "A" if (exists($bases{"A"}));
+		$code = "T" if (exists($bases{"T"}));
+		$code = "C" if (exists($bases{"C"}));
+		$code = "G" if (exists($bases{"G"}));
 	}
 	elsif (scalar(keys %bases) == 2) {
-		$code .= "R" if (exists($bases{"A"}) && exists($bases{"G"}));
-		$code .= "Y" if (exists($bases{"C"}) && exists($bases{"T"}));
-		$code .= "S" if (exists($bases{"G"}) && exists($bases{"C"}));
-		$code .= "W" if (exists($bases{"A"}) && exists($bases{"T"}));
-		$code .= "K" if (exists($bases{"G"}) && exists($bases{"T"}));
-		$code .= "M" if (exists($bases{"A"}) && exists($bases{"C"}));
+		$code = "R" if (exists($bases{"A"}) && exists($bases{"G"}));
+		$code = "Y" if (exists($bases{"C"}) && exists($bases{"T"}));
+		$code = "S" if (exists($bases{"G"}) && exists($bases{"C"}));
+		$code = "W" if (exists($bases{"A"}) && exists($bases{"T"}));
+		$code = "K" if (exists($bases{"G"}) && exists($bases{"T"}));
+		$code = "M" if (exists($bases{"A"}) && exists($bases{"C"}));
 	}
 	elsif (scalar(keys %bases) == 3) {
-		$code .= "B" if (exists($bases{"C"}) && exists($bases{"G"}) && exists($bases{"T"}));
-		$code .= "D" if (exists($bases{"A"}) && exists($bases{"G"}) && exists($bases{"T"}));
-		$code .= "H" if (exists($bases{"A"}) && exists($bases{"C"}) && exists($bases{"T"}));
-		$code .= "V" if (exists($bases{"A"}) && exists($bases{"C"}) && exists($bases{"G"}));
+		$code = "B" if (exists($bases{"C"}) && exists($bases{"G"}) && exists($bases{"T"}));
+		$code = "D" if (exists($bases{"A"}) && exists($bases{"G"}) && exists($bases{"T"}));
+		$code = "H" if (exists($bases{"A"}) && exists($bases{"C"}) && exists($bases{"T"}));
+		$code = "V" if (exists($bases{"A"}) && exists($bases{"C"}) && exists($bases{"G"}));
 	}
 	else {
-		$code .= "N";
+		$code = "N";
 	}
 
-	#die "IUPAC code not defined\n" if (!defined($code));
-	use Data::Dumper;
 	if (!defined($code)) {
+		use Data::Dumper;
 		print Dumper(\%bases);
-		die "IUPAC code not defined\n" if (!defined($code));
+		die "IUPAC code not defined\n";
 	}
 
 	return $code;
