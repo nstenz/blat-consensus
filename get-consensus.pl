@@ -26,6 +26,7 @@ die "You must you have specified an incorrect argument.\n" if (@ARGV);
 # Output file names
 #my $output_fasta = $input.".hits";
 my $blat_out_name = $input.".psl";
+(my $coverage_output = $input) =~ s/\.fa(sta)?/.cov/i;
 (my $consensus_output = $input) =~ s/\.fa(sta)?/.con.fasta/i;
 
 # Run blat 
@@ -68,6 +69,7 @@ my %target_seqs = parse_fasta($targets);
 
 # Create consensus sequence for each target
 my %consensuses;
+my %coverage_maps;
 foreach my $target (sort { $a cmp $b } keys %targets) {
 	my @hits = @{$targets{$target}};
 
@@ -78,7 +80,9 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 	my $target_seq = $target_seqs{$target};
 	foreach my $index (0 .. length($target_seq) - 1) {
 		my $base = substr($target_seq, $index, 1);
+		$alignment{$index}->{"BASES"} = {};
 		$alignment{$index}->{"TARGET"} = $base;
+		$alignment{$index}->{"INTRONS"} = {};
 	}
 
 	print "Building consensus sequence for '$target'...\n";
@@ -143,10 +147,13 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 
 				# Reverse complement character if needed
 				if ($hit->{'STRAND'} eq "-") {
-					$alignment{$q_index}->{rev_comp($char)}++;
+					#$alignment{$q_index}->{rev_comp($char)}++;
+					#$alignment{$q_index}->{"BASES"}->{rev_comp($char)}++;
+					$alignment{$q_index}->{"BASES"}{rev_comp($char)}++;
 				}
 				else {
-					$alignment{$q_index}->{$char}++;
+					#$alignment{$q_index}->{$char}++;
+					$alignment{$q_index}->{"BASES"}{$char}++;
 				}
 			}
 
@@ -157,15 +164,15 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 				my $intron;
 				if ($hit->{'STRAND'} eq "-") {
 					#$intron = rev_comp(substr($seq, $intron_start, $intron_length));
-					$intron = rev_comp(substr($seq, $intron_start, $intron_length));
-					#$alignment{$q_start + $intron_start - $t_start}->{rev_comp(substr($seq, $intron_start, $intron_length))}++;
+					$intron = rev_comp(substr($seq, $intron_start + 1, $intron_length - 1));
 				}
 				else {
 					#$intron = substr($seq, $intron_start, $intron_length);
-					$intron = substr($seq, $intron_start, $intron_length);
-					#$alignment{$q_start + $intron_start - $t_start}->{substr($seq, $intron_start, $intron_length)}++;
+					$intron = substr($seq, $intron_start + 1, $intron_length - 1);
 				}
-				$alignment{$q_start + $intron_start - $t_start}->{$intron}++;
+				#$alignment{$q_start + $intron_start - $t_start}->{$intron}++;
+				#$alignment{$q_start + $intron_start - $t_start}->{"INTRONS"}->{$intron}++;
+				$alignment{$q_start + $intron_start - $t_start}->{"INTRONS"}{$intron}++;
 
 				#my $intron_first_char = substr($intron, 0, 1);
 				#$alignment{$q_start + $intron_start - $t_start}->{$intron_first_char}--;
@@ -190,18 +197,19 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 #		print "  final_end: $end\n\n";
 	}
 
-	use Data::Dumper;
-	#$Data::Dumper::Sortkeys = sub { [sort { $a <=> $b } keys %{$_[0]}] };
-	$Data::Dumper::Sortkeys = sub { [sort { $b <=> $a } keys %{$_[0]}] };
-
-	#print Dumper(@alignment),"\n";
-	print Dumper(\%alignment),"\n";
+#	use Data::Dumper;
+#	#$Data::Dumper::Sortkeys = sub { [sort { $a <=> $b } keys %{$_[0]}] };
+#	$Data::Dumper::Sortkeys = sub { [sort { $b <=> $a } keys %{$_[0]}] };
+#
+#	#print Dumper(@alignment),"\n";
+#	print Dumper(\%alignment),"\n";
 	#my $alignment = consense_alignment(\%alignment);
-	my ($alignment, $coverage) = consense_alignment(\%alignment);
-	print "\n\n",$alignment,"\n$coverage\n\n";
+	my ($consensus, $coverage) = consense_alignment(\%alignment);
+	#print "\n\n",$consensus,"\n$coverage\n\n";
 
 #	#die if ($alignment =~ /a|t|c|g/);
-	$consensuses{$target} = consense_alignment(\%alignment);	
+	$consensuses{$target} = $consensus;	
+	$coverage_maps{$target} = $coverage;	
 }
 
 # Output consensus sequences
@@ -209,6 +217,14 @@ open(my $output, ">", $consensus_output);
 foreach my $target (sort { $a cmp $b } keys %consensuses) {
 	print {$output} ">$target\n";
 	print {$output} "$consensuses{$target}\n";
+}
+close($output);
+
+# Output coverage maps
+open($output, ">", $coverage_output);
+foreach my $target (sort { $a cmp $b } keys %coverage_maps) {
+	print {$output} ">$target\n";
+	print {$output} "$coverage_maps{$target}\n\n";
 }
 close($output);
 
@@ -230,30 +246,36 @@ sub consense_alignment {
 		else {
 			my $target_base = $bases_present{"TARGET"};
 
-			my %introns;
-			my %single_bases;
+		#	my %introns;
+		#	my %single_bases;
+			my %introns = %{$bases_present{"INTRONS"}};
+			my %single_bases = %{$bases_present{"BASES"}};
 
 			my $num_single_bases = 0;
-			foreach my $base_present (keys %bases_present) {
-				next if ($base_present eq "TARGET");
+			#my $site_coverage = 0;
+			#foreach my $base_present (keys %bases_present) {
+			foreach my $base_present (keys %single_bases) {
+				#next if ($base_present eq "TARGET");
 
-				if (length($base_present) == 1) {
-					$num_single_bases += $bases_present{$base_present};
-				}
+			#	if (length($base_present) == 1) {
+			#		$num_single_bases += $bases_present{$base_present};
+			#	}
+				$num_single_bases += $single_bases{$base_present};
 			}
 
-			foreach my $base_present (keys %bases_present) {
-				next if ($base_present eq "TARGET");
+			#foreach my $base_present (keys %bases_present) {
+			foreach my $base_present (keys %single_bases) {
+				#next if ($base_present eq "TARGET");
 
 				# Perhaps filter by proportion here? (remove base if it is present in < x% of contigs)
 
-				# Intron located here
-				if (length($base_present) > 1) {
-					$introns{$base_present} = $bases_present{$base_present};
-				}
-				else {
-					$single_bases{$base_present} = $bases_present{$base_present};
-				}
+			#	# Intron located here
+			#	if (length($base_present) > 1) {
+			#		$introns{$base_present} = $bases_present{$base_present};
+			#	}
+			#	else {
+			#		$single_bases{$base_present} = $bases_present{$base_present};
+			#	}
 
 				# Ambiguous, can't determine consensus
 				if ($base_present eq "N") {
@@ -264,27 +286,33 @@ sub consense_alignment {
 			}
 
 			# If only one nucleotide is found at the site output it
-			if (scalar(keys %single_bases) == 1 && scalar(keys %introns) == 0) {
+			#if (scalar(keys %single_bases) == 1 && scalar(keys %introns) == 0) {
+			if (scalar(keys %single_bases) == 1) {
 				$coverage .= "$num_single_bases ";
 				$alignment .= (keys %single_bases)[0];
 			}
 			# Handle ambiguous non-introns with IUPAC codes
-			elsif (scalar(keys %introns) == 0) {
+			#elsif (scalar(keys %introns) == 0) {
+			else {
 				$coverage .= "$num_single_bases ";
 				$alignment .= get_IUPAC(\%single_bases);
 			}
+
 			# We have introns
-			else {
+			#else {
+			if (scalar(keys %introns) > 0) {
 
 				# We only have one intron, output it
 				if (scalar(keys %introns) == 1) {
 					#$alignment .= lc((keys %introns)[0]);
 					my $intron = lc((keys %introns)[0]);
-					$alignment .= ucfirst($intron);
+					#$alignment .= ucfirst($intron);
+					$alignment .= $intron;
 
 					$coverage .= "(";
 					foreach my $index (0 .. length($intron) - 1) {
-						$coverage .= $bases_present{(keys %introns)[0]}." ";
+						#$coverage .= $bases_present{(keys %introns)[0]}." ";
+						$coverage .= $introns{(keys %introns)[0]}." ";
 					}
 					chop($coverage);
 					$coverage .= ") ";
@@ -311,7 +339,7 @@ sub consense_alignment {
 					#unlink("introns.fa", "introns-aligned.fa");
 
 					# Determine the consensus base at each site of the intron
-					$coverage .= "[";
+					$coverage .= "(";
 					foreach my $index (0 .. length((values %introns)[0]) - 1) {
 
 						my %bases;
@@ -324,17 +352,19 @@ sub consense_alignment {
 						}
 
 						# Get the IUPAC code for the current assortment of nucleotides
-						if ($index == 0) {
-							$coverage .= scalar(keys %intron_sequences)." ";
-							$alignment .= get_IUPAC(\%bases);
-						}
-						else {
-							$coverage .= scalar(keys %intron_sequences)." ";
-							$alignment .= lc(get_IUPAC(\%bases));
-						}
+					#	if ($index == 0) {
+					#		$coverage .= scalar(keys %intron_sequences)." ";
+					#		$alignment .= get_IUPAC(\%bases);
+					#	}
+					#	else {
+					#		$coverage .= scalar(keys %intron_sequences)." ";
+					#		$alignment .= lc(get_IUPAC(\%bases));
+					#	}
+						$alignment .= lc(get_IUPAC(\%bases));
+						$coverage .= scalar(keys %intron_sequences)." ";
 					}
 					chop($coverage);
-					$coverage .= "] ";
+					$coverage .= ") ";
 				}
 			}
 		}
