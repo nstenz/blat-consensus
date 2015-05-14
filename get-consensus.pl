@@ -31,8 +31,8 @@ my $blat_out_name = $input.".psl";
 
 # Run blat 
 print "Running blat against targets and contigs...\n";
-#my $return = system("$blat $input $targets -t=dna -q=dna -noHead $blat_out_name");
-my $return = system("$blat $input $targets -t=dna -q=dna -noHead $blat_out_name") if (!-e $blat_out_name);
+my $return = system("$blat $input $targets -t=dna -q=dna -noHead $blat_out_name");
+#my $return = system("$blat $input $targets -t=dna -q=dna -noHead $blat_out_name") if (!-e $blat_out_name);
 
 # Check that things worked correctly
 if ($return) {
