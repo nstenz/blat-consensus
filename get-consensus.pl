@@ -336,7 +336,7 @@ sub consense_alignment {
 
 					# Load aligned introns
 					my %intron_sequences = parse_fasta("introns-aligned.fa");
-					#unlink("introns.fa", "introns-aligned.fa");
+					unlink("introns.fa", "introns-aligned.fa");
 
 					# Determine the consensus base at each site of the intron
 					$coverage .= "(";
