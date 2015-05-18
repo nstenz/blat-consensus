@@ -400,15 +400,17 @@ sub get_IUPAC {
 		$code = "H" if (exists($bases{"A"}) && exists($bases{"C"}) && exists($bases{"T"}));
 		$code = "V" if (exists($bases{"A"}) && exists($bases{"C"}) && exists($bases{"G"}));
 	}
-	else {
-		$code = "N";
-	}
+#	else {
+#		$code = "N";
+#	}
+#
+#	if (!defined($code)) {
+#		use Data::Dumper;
+#		print Dumper(\%bases);
+#		die "IUPAC code not defined\n";
+#	}
 
-	if (!defined($code)) {
-		use Data::Dumper;
-		print Dumper(\%bases);
-		die "IUPAC code not defined\n";
-	}
+	$code = "N" if (!defined($code));
 
 	return $code;
 }
