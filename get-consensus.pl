@@ -78,6 +78,7 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 
 	# Add target bases to alignment
 	my $target_seq = $target_seqs{$target};
+	my $target_length = length($target_seq);
 	foreach my $index (0 .. length($target_seq) - 1) {
 		my $base = substr($target_seq, $index, 1);
 		$alignment{$index}->{"BASES"} = {};
@@ -94,16 +95,28 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 		my $seq = $contig_seqs{$hit->{'NAME'}};
 		my $contig_length = length($seq);
 
+		print "    Contig length: $contig_length\n";
+		print "    Target length: $target_length\n";
+
 		my @sizes = split(",", $hit->{'SIZES'});
 		my @t_starts = split(",", $hit->{'T_STARTS'});
 		my @q_starts = split(",", $hit->{'Q_STARTS'});
 
 		# Output strandedness
 		if ($hit->{'STRAND'} eq "-") {
-			print "    Contig will be reverse complemented (- hit).\n";
+			print "    Contig will be reverse complemented (- hit).\n\n";
+
+			$seq = rev_comp($seq);
+			foreach my $index (0 .. $#t_starts) {
+				$t_starts[$index] = $contig_length - $sizes[$index] - $t_starts[$index];
+				$q_starts[$index] = $target_length - $sizes[$index] - $q_starts[$index];
+			}
+			@sizes = reverse(@sizes);
+			@t_starts = reverse(@t_starts);
+			@q_starts = reverse(@q_starts);
 		}
 		else {
-			print "    Contig will not be reverse complemented (+ hit).\n";
+			print "    Contig will not be reverse complemented (+ hit).\n\n";
 		}
 
 		# Iterate through aligned blocks of target and contig
@@ -113,28 +126,18 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 			my $t_start = $t_starts[$index];
 
 			# Where the intron starts 
-			#my $intron_start = $t_start + $size - 1;
 			my $intron_start = $t_start + $size;
 
 			# If this is the last (or only) block, we set the next block 
 			# "start" to a value which makes the intron length 0
-			my $next_t_start;
+			my $intron_length = 0;
 			if ($index + 1 < scalar(@t_starts)) {
-				$next_t_start = $t_starts[$index + 1];
+				$intron_length = $t_starts[$index + 1] - $intron_start;
 			}
-			else {
-				# only/last block
-				$next_t_start = $intron_start + 1;
-			}
-
-			# Determine how long the intron is
-			#my $intron_length = $next_t_start - $intron_start;
-			my $intron_length = $next_t_start - $intron_start + 1;
 
 			print "    match_start : $t_start ($q_start)\n";
 			print "    match_length : $size\n";
 			print "    match_end : ",($t_start + $size - 1),"\n";
-			#print "    intron_start : $intron_start, intron_length : $intron_length\n\n";
 			print "    intron_start : $intron_start (",($q_start + $intron_start - $t_start),"), intron_length : $intron_length\n\n";
 
 			# Place aligned characters into %alignment
@@ -144,40 +147,15 @@ foreach my $target (sort { $a cmp $b } keys %targets) {
 				my $q_index = $q_start + $offset;
 
 				my $char = substr($seq, $t_index, 1);
-
-				# Reverse complement character if needed
-				if ($hit->{'STRAND'} eq "-") {
-					#$alignment{$q_index}->{rev_comp($char)}++;
-					#$alignment{$q_index}->{"BASES"}->{rev_comp($char)}++;
-					$alignment{$q_index}->{"BASES"}{rev_comp($char)}++;
-				}
-				else {
-					#$alignment{$q_index}->{$char}++;
-					$alignment{$q_index}->{"BASES"}{$char}++;
-				}
+				die "Could not get character at $t_index\n" if (!$char);
+				$alignment{$q_index}->{"BASES"}{$char}++;
 			}
 
 			# Place introns into %alignment
 			if ($intron_length > 0) {
-
-				# Reverse complement intron if needed
-				my $intron;
-				if ($hit->{'STRAND'} eq "-") {
-					#$intron = rev_comp(substr($seq, $intron_start, $intron_length));
-					$intron = rev_comp(substr($seq, $intron_start + 1, $intron_length - 1));
-				}
-				else {
-					#$intron = substr($seq, $intron_start, $intron_length);
-					$intron = substr($seq, $intron_start + 1, $intron_length - 1);
-				}
-				#$alignment{$q_start + $intron_start - $t_start}->{$intron}++;
-				#$alignment{$q_start + $intron_start - $t_start}->{"INTRONS"}->{$intron}++;
+				my $intron = substr($seq, $intron_start + 1, $intron_length);
+				die "Could not get intron at ",($intron_start + 1),"\n" if (!$intron);
 				$alignment{$q_start + $intron_start - $t_start}->{"INTRONS"}{$intron}++;
-
-				#my $intron_first_char = substr($intron, 0, 1);
-				#$alignment{$q_start + $intron_start - $t_start}->{$intron_first_char}--;
-
-				#delete($alignment{$q_start + $intron_start - $t_start}->{$intron_first_char}) if ($alignment{$q_start + $intron_start - $t_start}->{$intron_first_char} == 0);
 			}
 		}
 
@@ -461,7 +439,7 @@ sub parse_fasta {
 		or die "Could not open '$filename': $!\n";
 
 	while (my $line = <$alignment_file>) {
-		chomp($line);
+		$line =~ s/^\s+|\s+$//g;
 
 		# Taxon name
 		#if ($line =~ /^>(.*)/) {
